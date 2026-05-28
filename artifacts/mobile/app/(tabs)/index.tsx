@@ -1,5 +1,9 @@
 import * as Haptics from "expo-haptics";
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
+import {
+  bumpCrowd, playGol, playKick, playSaved, playWhistle,
+  resumeAudio, startCrowd, stopCrowd,
+} from "../../utils/sounds";
 import {
   Animated,
   Dimensions,
@@ -68,11 +72,19 @@ function keeperGoalX(dir: number) {
   return Math.max(GOAL_LEFT, Math.min(GOAL_RIGHT - KW,
     GOAL_LEFT + POST_W + dir * (GOAL_W - POST_W * 2) - KW / 2));
 }
+// Realistic save: keeper always gets ball in same zone; top-corner + power = goal
 function isSaved(tX: number, tY: number, kz: 0 | 1 | 2, pwr: number) {
   const z = tX < GOAL_LEFT + ZONE_W ? 0 : tX < GOAL_LEFT + ZONE_W * 2 ? 1 : 2;
-  if (z !== kz) return false;
-  const base = tY < GOAL_TOP + GOAL_H * 0.42 ? 0.52 : 0.85;
-  return Math.random() < base - pwr * 0.5;
+  if (z !== kz) return false; // keeper dived wrong → always goal
+  const isTopCorner = tY < GOAL_TOP + GOAL_H * 0.28;
+  const isHighBall  = tY < GOAL_TOP + GOAL_H * 0.5;
+  if (isTopCorner && pwr > 0.72) return false; // unstoppable top corner
+  if (isHighBall  && pwr > 0.88) return Math.random() < 0.5;
+  return true; // keeper in right zone → save
+}
+// Zone helper for sliders (0-1 value → zone 0/1/2)
+function dirToZone(dir: number): 0 | 1 | 2 {
+  return dir < 0.34 ? 0 : dir < 0.67 ? 1 : 2;
 }
 function cpuBallDest(zone: 0 | 1 | 2, ht: number) {
   const dirPct = zone === 0 ? 0.14 : zone === 1 ? 0.5 : 0.86;
@@ -301,6 +313,7 @@ export default function PenaltyGame() {
     if (phaseRef.current !== "player_kick") return;
     setPhase("kick_anim");
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+    playKick();
 
     const { x: tX, y: tY } = sliderTarget(direction, height);
     const kz = (Math.floor(Math.random() * 3)) as 0|1|2;
@@ -309,20 +322,24 @@ export default function PenaltyGame() {
     const isGoal = !saved;
 
     // Keeper dives to zone
-    Animated.spring(kAX, { toValue: kX, useNativeDriver: true, speed: 18, bounciness: 2 }).start();
+    Animated.spring(kAX, { toValue: kX, useNativeDriver: true, speed: 14, bounciness: 3 }).start();
 
     // Ball flies
     const destX = isGoal ? tX - BR : kX + KW/2 - BR;
     const destY = isGoal ? tY - BR : GOAL_BOT - BR - 12;
     Animated.parallel([
-      Animated.timing(bAX, { toValue: destX, duration: 580, useNativeDriver: true }),
-      Animated.timing(bAY, { toValue: destY, duration: 580, useNativeDriver: true }),
-      Animated.timing(bAS, { toValue: 0.38, duration: 580, useNativeDriver: true }),
-      Animated.timing(bAR, { toValue: 4, duration: 580, useNativeDriver: true }),
+      Animated.timing(bAX, { toValue: destX, duration: 560, useNativeDriver: true }),
+      Animated.timing(bAY, { toValue: destY, duration: 560, useNativeDriver: true }),
+      Animated.timing(bAS, { toValue: 0.38, duration: 560, useNativeDriver: true }),
+      Animated.timing(bAR, { toValue: 4, duration: 560, useNativeDriver: true }),
     ]).start(() => {
-      isGoal
-        ? Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
-        : Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      if (isGoal) {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        playGol();
+      } else {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+        playSaved();
+      }
       flashMsg(isGoal ? "⚽  GOL!" : "🧤  ATAJADO!", isGoal);
 
       const cur = gdRef.current;
@@ -330,61 +347,66 @@ export default function PenaltyGame() {
       upGd(nd);
 
       setTimeout(() => {
-        // Prepare CPU kick: CPU secretly picks zone
         cpuZone.current = Math.floor(Math.random()*3) as 0|1|2;
-        cpuHt.current = Math.random();
-        // Reset everything for next view
+        cpuHt.current = Math.random() * 0.75 + 0.12; // avoid extreme corners
         resetBall();
         kAX.setValue(K_INIT_X);
         setPower(0.5); setHeight(0.5); setDirection(0.5);
         msgOp.setValue(0);
+        playWhistle();
         setPhase("cpu_preparing");
       }, 1700);
     });
   }
 
-  // ── Player saves (commits dive position) ─────────────────────
+  // ── Player saves (commits dive) ───────────────────────────────
   function doSave() {
     if (phaseRef.current !== "cpu_preparing") return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
 
     const cDir = direction;
-    const cHt = height;
-    const cPwr = power;
+    const cHt  = height;
 
-    // Keeper target from direction slider
+    // Where keeper is diving → zone-based
+    const playerZone = dirToZone(cDir);
+    const cpuTargetZone = cpuZone.current;
+
+    // Keeper target x
     const kTarget = keeperGoalX(cDir);
-    // CPU ball destination
-    const { x: ballX, y: ballY } = cpuBallDest(cpuZone.current, cpuHt.current);
+    const { x: ballX, y: ballY } = cpuBallDest(cpuTargetZone, cpuHt.current);
 
-    // Set keeper animated value to current slider position, then spring-confirm
     kAX.setValue(kTarget);
     setPhase("cpu_flying");
 
-    // Keeper springs slightly (dive confirm)
+    // Keeper dive spring
     Animated.sequence([
-      Animated.spring(kAX, { toValue: kTarget + (cDir>0.5?10:-10), useNativeDriver: true, speed:60, bounciness:12 }),
+      Animated.spring(kAX, { toValue: kTarget + (cDir>0.5?14:-14), useNativeDriver: true, speed:55, bounciness:14 }),
       Animated.spring(kAX, { toValue: kTarget, useNativeDriver: true, speed:40, bounciness:4 }),
     ]).start();
 
-    // Ball flies from spot to goal
-    Animated.parallel([
-      Animated.timing(bAX, { toValue: ballX, duration: 580, useNativeDriver: true }),
-      Animated.timing(bAY, { toValue: ballY, duration: 580, useNativeDriver: true }),
-      Animated.timing(bAS, { toValue: 0.38, duration: 580, useNativeDriver: true }),
-      Animated.timing(bAR, { toValue: -4, duration: 580, useNativeDriver: true }),
-    ]).start(() => {
-      // Save calculation: compare keeper center to ball center
-      const keeperCX = kTarget + KW/2;
-      const keeperCY = GOAL_BOT - POST_W - cHt * (GOAL_H - POST_W*2);
-      const ballCX = ballX + BR;
-      const ballCY = ballY + BR;
-      const reach = 38 + cPwr * 65; // pixels of reach (bigger with power)
-      const saved = Math.abs(keeperCX - ballCX) < reach && Math.abs(keeperCY - ballCY) < reach;
+    playKick(); // CPU kicks
 
-      saved
-        ? Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
-        : Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    // Ball flies
+    Animated.parallel([
+      Animated.timing(bAX, { toValue: ballX, duration: 560, useNativeDriver: true }),
+      Animated.timing(bAY, { toValue: ballY, duration: 560, useNativeDriver: true }),
+      Animated.timing(bAS, { toValue: 0.38, duration: 560, useNativeDriver: true }),
+      Animated.timing(bAR, { toValue: -4, duration: 560, useNativeDriver: true }),
+    ]).start(() => {
+      // Zone-based save: same zone = save, different zone = goal
+      const zoneMatch = playerZone === cpuTargetZone;
+      const cpuIsHighBall = cpuHt.current > 0.7;
+      // Even in zone, high powerful shots can beat keeper on height mismatch
+      const htDelta = Math.abs(cHt - cpuHt.current);
+      const saved = zoneMatch && !(cpuIsHighBall && htDelta > 0.52);
+
+      if (saved) {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        playSaved();
+      } else {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+        playGol();
+      }
       flashMsg(saved ? "✋  ¡ATAJASTE!" : "💀  CPU GOL", saved);
 
       const cur = gdRef.current;
@@ -396,21 +418,28 @@ export default function PenaltyGame() {
       upGd(nd);
 
       setTimeout(() => {
-        if (nd.round > TOTAL) { setPhase("gameover"); return; }
+        if (nd.round > TOTAL) { setPhase("gameover"); stopCrowd(); return; }
         resetBall(); kAX.setValue(K_INIT_X);
         setPower(0.5); setHeight(0.5); setDirection(0.5);
         msgOp.setValue(0);
+        playWhistle();
         setPhase("player_kick");
       }, 1700);
     });
   }
 
   function startGame() {
+    resumeAudio();
     resetBall(); kAX.setValue(K_INIT_X); msgOp.setValue(0);
     setPower(0.5); setHeight(0.5); setDirection(0.5);
     const d = { ...INIT }; gdRef.current = d; setGd(d);
+    startCrowd();
+    playWhistle();
     setPhase("player_kick");
   }
+
+  // Cleanup crowd on unmount
+  useEffect(() => () => { stopCrowd(); }, []);
 
   const bRot = bAR.interpolate({ inputRange:[0,4], outputRange:["0deg","1440deg"] });
   const isKicking = phase === "kick_anim";
