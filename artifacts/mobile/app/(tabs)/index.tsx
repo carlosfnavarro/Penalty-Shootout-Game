@@ -25,7 +25,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 const { width: SW, height: SH } = Dimensions.get("window");
 const IS_WEB = Platform.OS === "web";
 
-// ─── Layout constants ────────────────────────────────────────────────────────
+// ─── Layout ──────────────────────────────────────────────────────────────────
 const TOP_OFF = IS_WEB ? 80 : 0;
 const GOAL_W = Math.min(SW * 0.76, 310);
 const GOAL_H = GOAL_W * 0.56;
@@ -42,11 +42,11 @@ const K_INIT_X = SW / 2 - KW / 2;
 const K_Y = GOAL_BOT - KH;
 
 const SPOT_X = SW / 2;
-const SPOT_Y = TOP_OFF + SH * 0.64;
+const SPOT_Y = TOP_OFF + SH * 0.62;
 const BR = 20;
 const BD = BR * 2;
-
 const TOTAL = 5;
+const THUMB_R = 13;
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 type Phase =
@@ -69,18 +69,11 @@ interface GD {
 
 const INIT: GD = { round: 1, ps: 0, cs: 0, pk: [], ck: [] };
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-function ballTarget(dx: number, dy: number): { x: number; y: number; in: boolean } {
-  const ratio = Math.min(Math.abs(dx) / Math.max(1, Math.abs(dy)), 1.25);
-  const tX = SPOT_X + Math.sign(dx) * ratio * (GOAL_W / 2) * 0.92;
-  const pwr = Math.min(1, Math.abs(dy) / 180);
-  const tY = GOAL_BOT - GOAL_H * (0.08 + pwr * 0.82);
-  const inside =
-    tX > GOAL_LEFT + POST_W &&
-    tX < GOAL_RIGHT - POST_W &&
-    tY > GOAL_TOP + POST_W &&
-    tY < GOAL_BOT;
-  return { x: tX, y: tY, in: inside };
+// ─── Kick target from sliders ─────────────────────────────────────────────────
+function sliderTarget(direction: number, height: number) {
+  const tX = GOAL_LEFT + POST_W + direction * (GOAL_W - POST_W * 2);
+  const tY = GOAL_BOT - POST_W - height * (GOAL_H - POST_W * 2);
+  return { x: tX, y: tY };
 }
 
 function kZoneX(z: 0 | 1 | 2): number {
@@ -93,13 +86,117 @@ function zone(x: number): 0 | 1 | 2 {
   return 2;
 }
 
-function saved(bx: number, by: number, inGoal: boolean, kz: 0 | 1 | 2): boolean {
-  if (!inGoal) return false;
-  if (zone(bx) !== kz) return false;
-  return by < GOAL_TOP + GOAL_H * 0.42 ? Math.random() < 0.58 : true;
+function isSaved(tX: number, tY: number, kz: 0 | 1 | 2, power: number): boolean {
+  if (zone(tX) !== kz) return false;
+  const powerBonus = power * 0.55; // high power reduces save chance
+  const baseSave = tY < GOAL_TOP + GOAL_H * 0.42 ? 0.55 : 0.88;
+  return Math.random() < baseSave - powerBonus;
 }
 
-// ─── Static field ────────────────────────────────────────────────────────────
+// ─── Slider component ─────────────────────────────────────────────────────────
+function SliderBar({
+  value,
+  onValueChange,
+  label,
+  color,
+  center = false,
+  disabled = false,
+}: {
+  value: number;
+  onValueChange: (v: number) => void;
+  label: string;
+  color: string;
+  center?: boolean;
+  disabled?: boolean;
+}) {
+  const trackRef = useRef<View>(null);
+  const trackPageX = useRef(0);
+  const trackWidth = useRef(SW - 64);
+
+  const measure = () => {
+    trackRef.current?.measure((_x, _y, w, _h, px) => {
+      trackPageX.current = px;
+      trackWidth.current = Math.max(1, w);
+    });
+  };
+
+  const clamp = (px: number) =>
+    Math.max(0, Math.min(1, (px - trackPageX.current) / trackWidth.current));
+
+  const panR = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => !disabled,
+      onMoveShouldSetPanResponder: () => !disabled,
+      onPanResponderGrant: (e) => {
+        measure();
+        onValueChange(clamp(e.nativeEvent.pageX));
+      },
+      onPanResponderMove: (e) => {
+        onValueChange(clamp(e.nativeEvent.pageX));
+      },
+    })
+  ).current;
+
+  const pct = value * 100;
+  const fillLeft = center ? (value < 0.5 ? `${pct}%` : "50%") : "0%";
+  const fillW = center
+    ? `${Math.abs(value - 0.5) * 100}%`
+    : `${pct}%`;
+
+  let displayVal: string;
+  if (center) {
+    if (value > 0.52) displayVal = `▶ ${Math.round((value - 0.5) * 200)}`;
+    else if (value < 0.48) displayVal = `◀ ${Math.round((0.5 - value) * 200)}`;
+    else displayVal = "CENTRO";
+  } else {
+    displayVal = `${Math.round(pct)}%`;
+  }
+
+  return (
+    <View style={sl.wrap}>
+      <View style={sl.header}>
+        <Text style={[sl.label, disabled && sl.dimText]}>{label}</Text>
+        <Text style={[sl.val, { color: disabled ? "#3a5570" : color }]}>
+          {displayVal}
+        </Text>
+      </View>
+      <View
+        ref={trackRef}
+        style={[sl.track, disabled && sl.trackDim]}
+        onLayout={measure}
+        hitSlop={{ top: 18, bottom: 18 }}
+        {...(!disabled ? panR.panHandlers : {})}
+      >
+        {center && <View style={sl.centerMark} />}
+        {/* Fill */}
+        <View
+          style={[
+            sl.fill,
+            {
+              left: fillLeft as `${number}%`,
+              width: fillW as `${number}%`,
+              backgroundColor: disabled ? "#2a4060" : color,
+            },
+          ]}
+        />
+        {/* Thumb */}
+        <View
+          style={[
+            sl.thumb,
+            {
+              left: `${pct}%` as `${number}%`,
+              transform: [{ translateX: -THUMB_R }],
+              backgroundColor: disabled ? "#2a4060" : color,
+              borderColor: disabled ? "#1e3050" : "#fff",
+            },
+          ]}
+        />
+      </View>
+    </View>
+  );
+}
+
+// ─── Static field SVG ─────────────────────────────────────────────────────────
 const Field = React.memo(function Field() {
   const nH = [0.22, 0.44, 0.66, 0.88];
   const nVC = 8;
@@ -123,80 +220,56 @@ const Field = React.memo(function Field() {
           <Stop offset="1" stopColor="#fffde7" stopOpacity={0} />
         </RadialGradient>
       </Defs>
-      {/* Sky */}
       <Rect x={0} y={0} width={SW} height={GOAL_BOT + 8} fill="url(#sky)" />
-      {/* Grass */}
       <Rect x={0} y={GOAL_BOT} width={SW} height={SH - GOAL_BOT} fill="url(#grass)" />
-      {/* Grass stripes */}
       {[0, 2, 4].map((i) => (
         <Rect
           key={i}
-          x={0}
-          y={GOAL_BOT + (i * (SH - GOAL_BOT)) / 6}
-          width={SW}
-          height={(SH - GOAL_BOT) / 12}
-          fill="#1e6b32"
-          opacity={0.4}
+          x={0} y={GOAL_BOT + (i * (SH - GOAL_BOT)) / 6}
+          width={SW} height={(SH - GOAL_BOT) / 12}
+          fill="#1e6b32" opacity={0.4}
         />
       ))}
-      {/* Stadium lights */}
       <Circle cx={22} cy={GOAL_TOP - 20} r={40} fill="url(#glow)" />
       <Circle cx={22} cy={GOAL_TOP - 20} r={7} fill="#ffffee" />
       <Circle cx={SW - 22} cy={GOAL_TOP - 20} r={40} fill="url(#glow)" />
       <Circle cx={SW - 22} cy={GOAL_TOP - 20} r={7} fill="#ffffee" />
-      {/* Net horizontals */}
       {nH.map((f) => (
-        <Line
-          key={`nh${f}`}
-          x1={GOAL_LEFT + POST_W}
-          y1={GOAL_TOP + POST_W + f * (GOAL_H - POST_W)}
-          x2={GOAL_RIGHT - POST_W}
-          y2={GOAL_TOP + POST_W + f * (GOAL_H - POST_W)}
-          stroke="rgba(200,200,200,0.22)"
-          strokeWidth={1}
+        <Line key={`nh${f}`}
+          x1={GOAL_LEFT + POST_W} y1={GOAL_TOP + POST_W + f * (GOAL_H - POST_W)}
+          x2={GOAL_RIGHT - POST_W} y2={GOAL_TOP + POST_W + f * (GOAL_H - POST_W)}
+          stroke="rgba(200,200,200,0.22)" strokeWidth={1}
         />
       ))}
-      {/* Net verticals */}
       {Array.from({ length: nVC + 1 }).map((_, i) => (
-        <Line
-          key={`nv${i}`}
-          x1={GOAL_LEFT + POST_W + i * nVS}
-          y1={GOAL_TOP + POST_W}
-          x2={GOAL_LEFT + POST_W + i * nVS}
-          y2={GOAL_BOT}
-          stroke="rgba(200,200,200,0.18)"
-          strokeWidth={1}
+        <Line key={`nv${i}`}
+          x1={GOAL_LEFT + POST_W + i * nVS} y1={GOAL_TOP + POST_W}
+          x2={GOAL_LEFT + POST_W + i * nVS} y2={GOAL_BOT}
+          stroke="rgba(200,200,200,0.18)" strokeWidth={1}
         />
       ))}
-      {/* Posts */}
       <Rect x={GOAL_LEFT} y={GOAL_TOP} width={POST_W} height={GOAL_H} fill="#f0f0f0" rx={4} />
       <Rect x={GOAL_RIGHT - POST_W} y={GOAL_TOP} width={POST_W} height={GOAL_H} fill="#f0f0f0" rx={4} />
       <Rect x={GOAL_LEFT} y={GOAL_TOP} width={GOAL_W} height={POST_W} fill="#f0f0f0" rx={4} />
-      {/* Shadow under goal */}
       <Rect x={GOAL_LEFT} y={GOAL_BOT} width={GOAL_W} height={5} fill="rgba(0,0,0,0.35)" />
-      {/* Goal line */}
-      <Line
-        x1={GOAL_LEFT - 35} y1={GOAL_BOT} x2={GOAL_RIGHT + 35} y2={GOAL_BOT}
-        stroke="rgba(255,255,255,0.45)" strokeWidth={2}
-      />
-      {/* Penalty box */}
-      <Line x1={GOAL_LEFT - 55} y1={GOAL_BOT} x2={GOAL_LEFT - 55} y2={GOAL_BOT + 135} stroke="rgba(255,255,255,0.28)" strokeWidth={2} />
-      <Line x1={GOAL_RIGHT + 55} y1={GOAL_BOT} x2={GOAL_RIGHT + 55} y2={GOAL_BOT + 135} stroke="rgba(255,255,255,0.28)" strokeWidth={2} />
-      <Line x1={GOAL_LEFT - 55} y1={GOAL_BOT + 135} x2={GOAL_RIGHT + 55} y2={GOAL_BOT + 135} stroke="rgba(255,255,255,0.28)" strokeWidth={2} />
-      {/* Penalty spot */}
+      <Line x1={GOAL_LEFT - 35} y1={GOAL_BOT} x2={GOAL_RIGHT + 35} y2={GOAL_BOT}
+        stroke="rgba(255,255,255,0.45)" strokeWidth={2} />
+      <Line x1={GOAL_LEFT - 55} y1={GOAL_BOT} x2={GOAL_LEFT - 55} y2={GOAL_BOT + 135}
+        stroke="rgba(255,255,255,0.28)" strokeWidth={2} />
+      <Line x1={GOAL_RIGHT + 55} y1={GOAL_BOT} x2={GOAL_RIGHT + 55} y2={GOAL_BOT + 135}
+        stroke="rgba(255,255,255,0.28)" strokeWidth={2} />
+      <Line x1={GOAL_LEFT - 55} y1={GOAL_BOT + 135} x2={GOAL_RIGHT + 55} y2={GOAL_BOT + 135}
+        stroke="rgba(255,255,255,0.28)" strokeWidth={2} />
       <Circle cx={SPOT_X} cy={SPOT_Y} r={4.5} fill="rgba(255,255,255,0.55)" />
-      {/* Penalty arc */}
       <Path
         d={`M ${SPOT_X - 70} ${SPOT_Y - 38} Q ${SPOT_X} ${SPOT_Y - 105} ${SPOT_X + 70} ${SPOT_Y - 38}`}
-        stroke="rgba(255,255,255,0.22)"
-        strokeWidth={2}
-        fill="none"
+        stroke="rgba(255,255,255,0.22)" strokeWidth={2} fill="none"
       />
     </Svg>
   );
 });
 
-// ─── Keeper shape ─────────────────────────────────────────────────────────────
+// ─── Keeper ───────────────────────────────────────────────────────────────────
 function Keeper({ color }: { color: string }) {
   return (
     <Svg width={KW} height={KH}>
@@ -208,28 +281,19 @@ function Keeper({ color }: { color: string }) {
   );
 }
 
-// ─── Ball shape ───────────────────────────────────────────────────────────────
+// ─── Ball ─────────────────────────────────────────────────────────────────────
 function Ball() {
   return (
     <Svg width={BD} height={BD}>
       <Circle cx={BR} cy={BR} r={BR - 1} fill="#f5f5f5" stroke="#d0d0d0" strokeWidth={1.5} />
-      <Path
-        d={`M${BR},${BR - 9} L${BR + 8},${BR - 3} L${BR + 8},${BR + 4} L${BR},${BR + 9} L${BR - 8},${BR + 4} L${BR - 8},${BR - 3} Z`}
-        fill="#111"
-      />
-      <Path
-        d={`M${BR - 10},${BR - 11} L${BR - 4},${BR - 16} L${BR + 2},${BR - 14} L${BR + 2},${BR - 8} L${BR - 4},${BR - 5} L${BR - 10},${BR - 7} Z`}
-        fill="#111"
-      />
-      <Path
-        d={`M${BR + 10},${BR - 11} L${BR + 4},${BR - 16} L${BR - 2},${BR - 14} L${BR - 2},${BR - 8} L${BR + 4},${BR - 5} L${BR + 10},${BR - 7} Z`}
-        fill="#111"
-      />
+      <Path d={`M${BR},${BR - 9} L${BR + 8},${BR - 3} L${BR + 8},${BR + 4} L${BR},${BR + 9} L${BR - 8},${BR + 4} L${BR - 8},${BR - 3} Z`} fill="#111" />
+      <Path d={`M${BR - 10},${BR - 11} L${BR - 4},${BR - 16} L${BR + 2},${BR - 14} L${BR + 2},${BR - 8} L${BR - 4},${BR - 5} L${BR - 10},${BR - 7} Z`} fill="#111" />
+      <Path d={`M${BR + 10},${BR - 11} L${BR + 4},${BR - 16} L${BR - 2},${BR - 14} L${BR - 2},${BR - 8} L${BR + 4},${BR - 5} L${BR + 10},${BR - 7} Z`} fill="#111" />
     </Svg>
   );
 }
 
-// ─── Main component ───────────────────────────────────────────────────────────
+// ─── Main game ────────────────────────────────────────────────────────────────
 export default function PenaltyGame() {
   const insets = useSafeAreaInsets();
   const topPad = insets.top || (IS_WEB ? 67 : 0);
@@ -252,11 +316,15 @@ export default function PenaltyGame() {
   const [msg, setMsg] = useState("");
   const [showMsg, setShowMsg] = useState(false);
   const [goodMsg, setGoodMsg] = useState(false);
-  const [dragVec, setDragVec] = useState<{ dx: number; dy: number } | null>(null);
   const [dive, setDive] = useState<"left" | "right" | null>(null);
   const diveRef = useRef<"left" | "right" | null>(null);
 
-  // Animated values — all using transforms (native driver compatible)
+  // Slider state
+  const [power, setPower] = useState(0.5);
+  const [height, setHeight] = useState(0.5);
+  const [direction, setDirection] = useState(0.5);
+
+  // Animated values
   const bAX = useRef(new Animated.Value(SPOT_X - BR)).current;
   const bAY = useRef(new Animated.Value(SPOT_Y - BR)).current;
   const bAS = useRef(new Animated.Value(1)).current;
@@ -292,64 +360,42 @@ export default function PenaltyGame() {
     ]).start(() => setShowMsg(false));
   }
 
-  // ── Pan responder for kicking ──────────────────────────────────
-  const panR = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: (e) => {
-        return (
-          phaseRef.current === "player_kick" &&
-          e.nativeEvent.pageY > SPOT_Y - 80
-        );
-      },
-      onPanResponderMove: (_, g) => {
-        if (g.dy < 0 || Math.abs(g.dx) > 15)
-          setDragVec({ dx: g.dx, dy: g.dy });
-      },
-      onPanResponderRelease: (_, g) => {
-        setDragVec(null);
-        if (g.dy < -38) doKick(g.dx, g.dy);
-      },
-      onPanResponderTerminate: () => setDragVec(null),
-    })
-  ).current;
-
-  // ── Player kicks ───────────────────────────────────────────────
-  function doKick(dx: number, dy: number) {
+  // ── Kick ──────────────────────────────────────────────────────
+  function doKick() {
     if (phaseRef.current !== "player_kick") return;
     setPhase("kick_anim");
-    setDragVec(null);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
 
-    const { x: tX, y: tY, in: inGoal } = ballTarget(dx, dy);
+    const { x: tX, y: tY } = sliderTarget(direction, height);
     const kz = (Math.floor(Math.random() * 3)) as 0 | 1 | 2;
     const kX = kZoneX(kz);
-    const isGoal = !(!inGoal || saved(tX, tY, inGoal, kz));
+    const saved = isSaved(tX, tY, kz, power);
+    const isGoal = !saved;
     const res: KR = isGoal ? "goal" : "saved";
+    const dur = Math.round(700 - power * 300); // fast shot = shorter anim
 
-    // Keeper dive
     Animated.spring(kAX, {
       toValue: kX,
       useNativeDriver: true,
-      speed: 20,
+      speed: 14 + power * 10,
       bounciness: 2,
     }).start();
 
-    // Ball flies
     const destX = isGoal ? tX - BR : kX + KW / 2 - BR;
     const destY = isGoal ? tY - BR : GOAL_BOT - BR - 12;
 
     Animated.parallel([
-      Animated.timing(bAX, { toValue: destX, duration: 460, useNativeDriver: true }),
-      Animated.timing(bAY, { toValue: destY, duration: 460, useNativeDriver: true }),
-      Animated.timing(bAS, { toValue: 0.36, duration: 460, useNativeDriver: true }),
-      Animated.timing(bAR, { toValue: 4, duration: 460, useNativeDriver: true }),
+      Animated.timing(bAX, { toValue: destX, duration: dur, useNativeDriver: true }),
+      Animated.timing(bAY, { toValue: destY, duration: dur, useNativeDriver: true }),
+      Animated.timing(bAS, { toValue: 0.36, duration: dur, useNativeDriver: true }),
+      Animated.timing(bAR, { toValue: 4, duration: dur, useNativeDriver: true }),
     ]).start(() => {
       if (isGoal) {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         flashMsg("⚽  GOL!", true);
       } else {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-        flashMsg(inGoal ? "🧤  ATAJADO!" : "❌  AFUERA!", false);
+        flashMsg("🧤  ATAJADO!", false);
       }
       const cur = gdRef.current;
       const nd: GD = { ...cur, ps: cur.ps + (isGoal ? 1 : 0), pk: [...cur.pk, res] };
@@ -377,14 +423,13 @@ export default function PenaltyGame() {
   function doCpuKick(cur: GD) {
     setPhase("cpu_flying");
     diveRef.current = null;
-
     const cpuZone = (Math.floor(Math.random() * 3)) as 0 | 1 | 2;
     const cpuDestX = GOAL_LEFT + cpuZone * ZONE_W + ZONE_W / 2 - BR;
 
     Animated.parallel([
-      Animated.timing(cbAX, { toValue: cpuDestX, duration: 1450, useNativeDriver: true }),
-      Animated.timing(cbAY, { toValue: SPOT_Y - BR - 30, duration: 1450, useNativeDriver: true }),
-      Animated.timing(cbAS, { toValue: 1.18, duration: 1450, useNativeDriver: true }),
+      Animated.timing(cbAX, { toValue: cpuDestX, duration: 1400, useNativeDriver: true }),
+      Animated.timing(cbAY, { toValue: SPOT_Y - BR - 20, duration: 1400, useNativeDriver: true }),
+      Animated.timing(cbAS, { toValue: 1.18, duration: 1400, useNativeDriver: true }),
     ]).start(() => {
       const d = diveRef.current;
       const zoneName = cpuZone === 0 ? "left" : cpuZone === 2 ? "right" : "center";
@@ -401,11 +446,9 @@ export default function PenaltyGame() {
       }
 
       const nd: GD = {
-        round: cur.round + 1,
-        ps: cur.ps,
+        round: cur.round + 1, ps: cur.ps,
         cs: cur.cs + (cpuGoal ? 1 : 0),
-        pk: cur.pk,
-        ck: [...cur.ck, res],
+        pk: cur.pk, ck: [...cur.ck, res],
       };
       upGd(nd);
 
@@ -414,6 +457,9 @@ export default function PenaltyGame() {
           setPhase("gameover");
         } else {
           reset();
+          setPower(0.5);
+          setHeight(0.5);
+          setDirection(0.5);
           setDive(null);
           setPhase("player_kick");
         }
@@ -436,6 +482,9 @@ export default function PenaltyGame() {
 
   function startGame() {
     reset();
+    setPower(0.5);
+    setHeight(0.5);
+    setDirection(0.5);
     const d = { ...INIT };
     gdRef.current = d;
     setGd(d);
@@ -450,19 +499,12 @@ export default function PenaltyGame() {
 
   const isPlayerPhase = phase === "player_kick" || phase === "kick_anim";
   const isCpuPhase = phase === "cpu_preparing" || phase === "cpu_flying";
+  const isKicking = phase === "kick_anim";
 
-  // Aim indicator
-  let aimX = SPOT_X;
-  let aimY = SPOT_Y;
-  let aimIn = false;
-  if (dragVec && dragVec.dy < 0) {
-    const t = ballTarget(dragVec.dx, dragVec.dy);
-    aimX = t.x;
-    aimY = Math.max(GOAL_TOP + POST_W + 2, Math.min(GOAL_BOT - 2, t.y));
-    aimIn = t.in;
-  }
+  // Live aim indicator position (from sliders)
+  const { x: aimX, y: aimY } = sliderTarget(direction, height);
 
-  // ─── Menu ────────────────────────────────────────────────────────
+  // ─── Menu ─────────────────────────────────────────────────────
   if (phase === "menu") {
     return (
       <View style={s.root}>
@@ -470,7 +512,7 @@ export default function PenaltyGame() {
         <View style={[s.centerFill, { paddingTop: topPad }]}>
           <Text style={s.bigEmoji}>⚽</Text>
           <Text style={s.mainTitle}>PENALES</Text>
-          <Text style={s.mainSub}>5 turnos · Patea y atajá</Text>
+          <Text style={s.mainSub}>5 turnos · Ajustá los controles y pateá</Text>
           <TouchableOpacity style={s.bigBtn} onPress={startGame} activeOpacity={0.82}>
             <Text style={s.bigBtnTxt}>JUGAR</Text>
           </TouchableOpacity>
@@ -479,7 +521,7 @@ export default function PenaltyGame() {
     );
   }
 
-  // ─── Game Over ───────────────────────────────────────────────────
+  // ─── Game Over ────────────────────────────────────────────────
   if (phase === "gameover") {
     const won = gd.ps > gd.cs;
     const tie = gd.ps === gd.cs;
@@ -504,15 +546,11 @@ export default function PenaltyGame() {
           </View>
           <View style={s.kickHist}>
             {gd.pk.map((r, i) => (
-              <Text key={i} style={s.histIcon}>
-                {r === "goal" ? "⚽" : "❌"}
-              </Text>
+              <Text key={i} style={s.histIcon}>{r === "goal" ? "⚽" : "❌"}</Text>
             ))}
             <Text style={s.histSep}> VS </Text>
             {gd.ck.map((r, i) => (
-              <Text key={i} style={s.histIcon}>
-                {r === "goal" ? "⚽" : "❌"}
-              </Text>
+              <Text key={i} style={s.histIcon}>{r === "goal" ? "⚽" : "❌"}</Text>
             ))}
           </View>
           <TouchableOpacity style={s.bigBtn} onPress={startGame} activeOpacity={0.82}>
@@ -523,51 +561,36 @@ export default function PenaltyGame() {
     );
   }
 
-  // ─── Main game ───────────────────────────────────────────────────
+  // ─── Main game screen ─────────────────────────────────────────
   return (
-    <View
-      style={s.root}
-      {...(isPlayerPhase ? panR.panHandlers : {})}
-    >
+    <View style={s.root}>
       <Field />
 
-      {/* Aim guide */}
-      {dragVec && dragVec.dy < 0 && (
-        <View style={StyleSheet.absoluteFill} pointerEvents="none">
-          <Svg width={SW} height={SH}>
-            <Line
-              x1={SPOT_X} y1={SPOT_Y} x2={aimX} y2={aimY}
-              stroke={aimIn ? "rgba(241,196,15,0.75)" : "rgba(231,76,60,0.65)"}
-              strokeWidth={3}
-              strokeDasharray="9,6"
-            />
-            <Circle
-              cx={aimX} cy={aimY} r={9}
-              fill={aimIn ? "rgba(241,196,15,0.85)" : "rgba(231,76,60,0.8)"}
-            />
-          </Svg>
-        </View>
+      {/* Live aim dot in goal */}
+      {phase === "player_kick" && (
+        <View
+          style={[
+            s.aimDot,
+            { left: aimX - 10, top: aimY - 10 },
+          ]}
+        />
       )}
 
-      {/* Keeper (player kick phases) */}
+      {/* Keeper */}
       {isPlayerPhase && (
-        <Animated.View
-          style={[s.keeperAbs, { transform: [{ translateX: kAX }] }]}
-        >
+        <Animated.View style={[s.keeperAbs, { transform: [{ translateX: kAX }] }]}>
           <Keeper color="#27AE60" />
         </Animated.View>
       )}
 
-      {/* Player as keeper (cpu kick phases) */}
+      {/* Player as keeper */}
       {isCpuPhase && (
-        <Animated.View
-          style={[s.playerKeeperAbs, { transform: [{ translateX: pkAX }] }]}
-        >
+        <Animated.View style={[s.playerKeeperAbs, { transform: [{ translateX: pkAX }] }]}>
           <Keeper color="#2980B9" />
         </Animated.View>
       )}
 
-      {/* Ball (player kick phases) */}
+      {/* Ball */}
       {isPlayerPhase && (
         <Animated.View
           style={[
@@ -586,25 +609,19 @@ export default function PenaltyGame() {
         </Animated.View>
       )}
 
-      {/* CPU ball */}
+      {/* CPU Ball */}
       {isCpuPhase && (
         <Animated.View
           style={[
             s.ballAbs,
-            {
-              transform: [
-                { translateX: cbAX },
-                { translateY: cbAY },
-                { scale: cbAS },
-              ],
-            },
+            { transform: [{ translateX: cbAX }, { translateY: cbAY }, { scale: cbAS }] },
           ]}
         >
           <Ball />
         </Animated.View>
       )}
 
-      {/* Score header */}
+      {/* Score bar */}
       <View style={[s.scoreBar, { top: topPad + 6 }]}>
         <View style={s.scoreSide}>
           <Text style={s.scLabel}>VOS</Text>
@@ -613,13 +630,8 @@ export default function PenaltyGame() {
             {Array.from({ length: TOTAL }).map((_, i) => {
               const r = gd.pk[i];
               return (
-                <View
-                  key={i}
-                  style={[
-                    s.dot,
-                    r === "goal" ? s.dotGreen : r === "saved" ? s.dotRed : s.dotGray,
-                  ]}
-                />
+                <View key={i} style={[s.dot,
+                  r === "goal" ? s.dotGreen : r === "saved" ? s.dotRed : s.dotGray]} />
               );
             })}
           </View>
@@ -634,13 +646,8 @@ export default function PenaltyGame() {
             {Array.from({ length: TOTAL }).map((_, i) => {
               const r = gd.ck[i];
               return (
-                <View
-                  key={i}
-                  style={[
-                    s.dot,
-                    r === "goal" ? s.dotGreen : r === "saved" ? s.dotRed : s.dotGray,
-                  ]}
-                />
+                <View key={i} style={[s.dot,
+                  r === "goal" ? s.dotGreen : r === "saved" ? s.dotRed : s.dotGray]} />
               );
             })}
           </View>
@@ -649,17 +656,11 @@ export default function PenaltyGame() {
 
       {/* Turn label */}
       {!showMsg && (
-        <View style={[s.turnLabel, { top: topPad + 98 }]}>
-          {phase === "player_kick" && (
-            <Text style={s.turnTxt}>TU TURNO</Text>
-          )}
+        <View style={[s.turnLabel, { top: topPad + 96 }]}>
+          {phase === "player_kick" && <Text style={s.turnTxt}>TU TURNO — ajustá y pateá</Text>}
           {phase === "kick_anim" && <Text style={s.turnTxt}>¡Allá va!</Text>}
-          {phase === "cpu_preparing" && (
-            <Text style={[s.turnTxt, { color: "#E74C3C" }]}>CPU PATEA</Text>
-          )}
-          {phase === "cpu_flying" && !dive && (
-            <Text style={[s.turnTxt, { color: "#E74C3C" }]}>⚡ ¡ATAJÁ AHORA!</Text>
-          )}
+          {phase === "cpu_preparing" && <Text style={[s.turnTxt, { color: "#E74C3C" }]}>CPU PATEA</Text>}
+          {phase === "cpu_flying" && !dive && <Text style={[s.turnTxt, { color: "#E74C3C" }]}>⚡ ¡ATAJÁ!</Text>}
           {phase === "cpu_flying" && dive && (
             <Text style={[s.turnTxt, { color: "#3498DB" }]}>
               {dive === "left" ? "◀ Tirándose izquierda" : "Tirándose derecha ▶"}
@@ -668,9 +669,47 @@ export default function PenaltyGame() {
         </View>
       )}
 
-      {/* Dive buttons */}
+      {/* ─── Sliders panel (player kick) ─── */}
+      {(phase === "player_kick" || phase === "kick_anim") && (
+        <View style={[s.sliderPanel, { bottom: botPad + 4 }]}>
+          <SliderBar
+            value={power}
+            onValueChange={setPower}
+            label="⚡ POTENCIA"
+            color="#E74C3C"
+            disabled={isKicking}
+          />
+          <SliderBar
+            value={height}
+            onValueChange={setHeight}
+            label="↕ ALTURA"
+            color="#3498DB"
+            disabled={isKicking}
+          />
+          <SliderBar
+            value={direction}
+            onValueChange={setDirection}
+            label="↔ DIRECCIÓN"
+            color="#F1C40F"
+            center
+            disabled={isKicking}
+          />
+          <TouchableOpacity
+            style={[s.kickBtn, isKicking && s.kickBtnDisabled]}
+            onPress={doKick}
+            activeOpacity={0.8}
+            disabled={isKicking}
+          >
+            <Text style={s.kickBtnTxt}>
+              {isKicking ? "..." : "⚽  PATEAR"}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* ─── Dive buttons (CPU kick) ─── */}
       {phase === "cpu_flying" && (
-        <View style={[s.diveRow, { bottom: botPad + 28 }]}>
+        <View style={[s.diveRow, { bottom: botPad + 24 }]}>
           <TouchableOpacity
             style={[s.diveBtn, dive === "left" && s.diveBtnOn]}
             onPress={() => playerDive("left")}
@@ -688,31 +727,94 @@ export default function PenaltyGame() {
         </View>
       )}
 
-      {/* Kick hint */}
-      {phase === "player_kick" && (
-        <View style={[s.hintRow, { bottom: botPad + 28 }]}>
-          <Text style={s.hintTxt}>Deslizá hacia arriba para patear</Text>
+      {/* CPU turn hint */}
+      {phase === "cpu_preparing" && (
+        <View style={[s.diveRow, { bottom: botPad + 24 }]}>
+          <View style={[s.diveBtn, { flex: 1, backgroundColor: "rgba(231,76,60,0.15)", borderColor: "#E74C3C" }]}>
+            <Text style={[s.diveTxt, { color: "#E74C3C" }]}>Prepará tus guantes...</Text>
+          </View>
         </View>
       )}
 
-      {/* Message */}
+      {/* Message overlay */}
       {showMsg && (
         <Animated.View style={[s.msgOverlay, { opacity: msgOp }]}>
-          <Text style={[s.msgTxt, { color: goodMsg ? "#2ECC71" : "#E74C3C" }]}>
-            {msg}
-          </Text>
+          <Text style={[s.msgTxt, { color: goodMsg ? "#2ECC71" : "#E74C3C" }]}>{msg}</Text>
         </Animated.View>
       )}
     </View>
   );
 }
 
-// ─── Styles ───────────────────────────────────────────────────────────────────
-const s = StyleSheet.create({
-  root: {
-    flex: 1,
-    backgroundColor: "#020c1a",
+// ─── Slider styles ────────────────────────────────────────────────────────────
+const sl = StyleSheet.create({
+  wrap: {
+    gap: 6,
   },
+  header: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  label: {
+    color: "#7a9bb5",
+    fontSize: 11,
+    fontWeight: "700",
+    letterSpacing: 1.5,
+  },
+  dimText: {
+    color: "#2a4060",
+  },
+  val: {
+    fontSize: 12,
+    fontWeight: "800",
+    letterSpacing: 0.5,
+    minWidth: 60,
+    textAlign: "right",
+  },
+  track: {
+    height: 8,
+    backgroundColor: "#1e3d6e",
+    borderRadius: 4,
+    overflow: "visible",
+  },
+  trackDim: {
+    backgroundColor: "#142840",
+  },
+  fill: {
+    position: "absolute",
+    height: 8,
+    borderRadius: 4,
+    top: 0,
+  },
+  thumb: {
+    position: "absolute",
+    width: THUMB_R * 2,
+    height: THUMB_R * 2,
+    borderRadius: THUMB_R,
+    top: -(THUMB_R - 4),
+    borderWidth: 2.5,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.5,
+    shadowRadius: 3,
+    elevation: 5,
+  },
+  centerMark: {
+    position: "absolute",
+    left: "50%",
+    top: -2,
+    width: 2,
+    height: 12,
+    backgroundColor: "rgba(255,255,255,0.3)",
+    borderRadius: 1,
+    transform: [{ translateX: -1 }],
+  },
+});
+
+// ─── Game styles ──────────────────────────────────────────────────────────────
+const s = StyleSheet.create({
+  root: { flex: 1, backgroundColor: "#020c1a" },
   centerFill: {
     flex: 1,
     alignItems: "center",
@@ -720,16 +822,9 @@ const s = StyleSheet.create({
     gap: 16,
     paddingHorizontal: 32,
   },
-
-  // Menu / game over
   bigEmoji: { fontSize: 78, marginBottom: 4 },
-  mainTitle: {
-    fontSize: 50,
-    fontWeight: "900",
-    color: "#fff",
-    letterSpacing: 5,
-  },
-  mainSub: { fontSize: 15, color: "#7a9bb5", textAlign: "center" },
+  mainTitle: { fontSize: 50, fontWeight: "900", color: "#fff", letterSpacing: 5 },
+  mainSub: { fontSize: 14, color: "#7a9bb5", textAlign: "center" },
   bigBtn: {
     marginTop: 20,
     backgroundColor: "#2ECC71",
@@ -737,12 +832,7 @@ const s = StyleSheet.create({
     paddingVertical: 18,
     borderRadius: 50,
   },
-  bigBtnTxt: {
-    color: "#000",
-    fontSize: 20,
-    fontWeight: "900",
-    letterSpacing: 3,
-  },
+  bigBtnTxt: { color: "#000", fontSize: 20, fontWeight: "900", letterSpacing: 3 },
   goScoreRow: { flexDirection: "row", alignItems: "center", gap: 24 },
   goSide: { alignItems: "center", gap: 2 },
   goLabel: { color: "#7a9bb5", fontSize: 12, fontWeight: "700", letterSpacing: 2 },
@@ -791,28 +881,56 @@ const s = StyleSheet.create({
     textShadowRadius: 4,
   },
 
-  // Keeper
-  keeperAbs: {
+  // Aim indicator
+  aimDot: {
     position: "absolute",
-    left: 0,
-    top: K_Y,
-    zIndex: 20,
-  },
-  playerKeeperAbs: {
-    position: "absolute",
-    left: 0,
-    top: SPOT_Y - KH + 20,
-    zIndex: 20,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: "rgba(241,196,15,0.85)",
+    borderWidth: 2.5,
+    borderColor: "#fff",
+    zIndex: 40,
+    shadowColor: "#F1C40F",
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.9,
+    shadowRadius: 8,
+    elevation: 8,
   },
 
-  // Ball
-  ballAbs: {
+  // Keeper / ball
+  keeperAbs: { position: "absolute", left: 0, top: K_Y, zIndex: 20 },
+  playerKeeperAbs: { position: "absolute", left: 0, top: SPOT_Y - KH + 20, zIndex: 20 },
+  ballAbs: { position: "absolute", left: 0, top: 0, width: BD, height: BD, zIndex: 30 },
+
+  // Slider panel
+  sliderPanel: {
     position: "absolute",
-    left: 0,
-    top: 0,
-    width: BD,
-    height: BD,
-    zIndex: 30,
+    left: 20,
+    right: 20,
+    backgroundColor: "rgba(6,18,36,0.92)",
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.08)",
+    padding: 18,
+    gap: 14,
+    zIndex: 60,
+  },
+  kickBtn: {
+    marginTop: 4,
+    backgroundColor: "#2ECC71",
+    paddingVertical: 15,
+    borderRadius: 14,
+    alignItems: "center",
+  },
+  kickBtnDisabled: {
+    backgroundColor: "#1a4d30",
+  },
+  kickBtnTxt: {
+    color: "#000",
+    fontSize: 17,
+    fontWeight: "900",
+    letterSpacing: 2,
   },
 
   // Dive buttons
@@ -833,35 +951,13 @@ const s = StyleSheet.create({
     borderRadius: 16,
     alignItems: "center",
   },
-  diveBtnOn: {
-    backgroundColor: "rgba(41,128,185,0.7)",
-  },
-  diveTxt: {
-    color: "#fff",
-    fontSize: 15,
-    fontWeight: "900",
-    letterSpacing: 1.5,
-  },
-
-  // Kick hint
-  hintRow: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    alignItems: "center",
-    zIndex: 50,
-  },
-  hintTxt: {
-    color: "rgba(255,255,255,0.45)",
-    fontSize: 13,
-    fontWeight: "500",
-    letterSpacing: 0.5,
-  },
+  diveBtnOn: { backgroundColor: "rgba(41,128,185,0.7)" },
+  diveTxt: { color: "#fff", fontSize: 15, fontWeight: "900", letterSpacing: 1.5 },
 
   // Message
   msgOverlay: {
     position: "absolute",
-    top: "44%",
+    top: "42%",
     left: 0,
     right: 0,
     alignItems: "center",
