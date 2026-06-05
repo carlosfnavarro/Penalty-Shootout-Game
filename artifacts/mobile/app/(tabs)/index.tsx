@@ -467,6 +467,11 @@ export default function PenaltyGame() {
   // Keeper dive direction for animation
   const [keeperDiveDir, setKeeperDiveDir] = useState<-1|0|1>(0);
 
+  // Sudden death (desempate)
+  const [isSuddenDeath, setIsSuddenDeath] = useState(false);
+  const isSuddenDeathRef = useRef(false);
+  function setSuddenDeath(v: boolean) { isSuddenDeathRef.current = v; setIsSuddenDeath(v); }
+
   const [power,    setPower]    = useState(0.5);
   const [height,   setHeight]   = useState(0.5);
   const [direction,setDirection]= useState(0.5);
@@ -603,7 +608,34 @@ export default function PenaltyGame() {
       upGd(nd);
 
       setTimeout(() => {
-        if (nd.round > TOTAL) { setPhase("gameover"); stopCrowd(); return; }
+        const inSD = isSuddenDeathRef.current;
+
+        if (nd.round > TOTAL) {
+          if (!inSD) {
+            // Terminaron los 5 turnos reglamentarios
+            if (nd.ps !== nd.cs) {
+              // Hay ganador → fin de partido
+              setPhase("gameover"); stopCrowd(); return;
+            }
+            // Empate → ¡DESEMPATE!
+            setSuddenDeath(true);
+            flashMsg("🔥  DESEMPATE!", true);
+          } else {
+            // Ya estamos en muerte súbita → ver si alguien ganó esta ronda
+            const lastPK = nd.pk[nd.pk.length - 1]; // resultado del jugador en esta ronda SD
+            const lastCK = nd.ck[nd.ck.length - 1]; // resultado de CPU en esta ronda SD
+            const playerScored = lastPK === "goal";
+            const cpuScored    = lastCK === "goal";
+
+            if (playerScored !== cpuScored) {
+              // Resultados distintos → termina el partido
+              setPhase("gameover"); stopCrowd(); return;
+            }
+            // Ambos convirtieron o ambos fallaron → sigue el desempate
+          }
+        }
+
+        // Siguiente ronda (reglamentaria o muerte súbita)
         resetBall(); kAX.setValue(K_INIT_X);
         setKeeperDiveDir(0);
         setPower(0.5); setHeight(0.5); setDirection(0.5);
@@ -618,6 +650,7 @@ export default function PenaltyGame() {
     resumeAudio();
     resetBall(); kAX.setValue(K_INIT_X); msgOp.setValue(0);
     setKeeperDiveDir(0);
+    setSuddenDeath(false);
     setPower(0.5); setHeight(0.5); setDirection(0.5);
     const d = {...INIT}; gdRef.current=d; setGd(d);
     startCrowd();
@@ -735,10 +768,19 @@ export default function PenaltyGame() {
   // ─── Game Over ────────────────────────────────────────────────
   if (phase === "gameover") {
     const won=gd.ps>gd.cs, tie=gd.ps===gd.cs;
+    const wentToSD = gd.pk.length > TOTAL; // went to sudden death
+    // Split history into regulation (first 5) + sudden death rounds
+    const regPK = gd.pk.slice(0, TOTAL);
+    const regCK = gd.ck.slice(0, TOTAL);
+    const sdPK  = gd.pk.slice(TOTAL);
+    const sdCK  = gd.ck.slice(TOTAL);
     return (
       <View style={s.root}>
         <Field />
         <View style={[s.center, {paddingTop:topPad}]}>
+          {wentToSD && (
+            <Text style={s.sdFinishBadge}>🔥 MUERTE SÚBITA</Text>
+          )}
           <Text style={s.emoji}>{won?"🏆":tie?"🤝":"😤"}</Text>
           <Text style={[s.title, {color:won?"#2ECC71":tie?"#F1C40F":"#E74C3C"}]}>
             {won?"¡GANASTE!":tie?"EMPATE":"PERDISTE"}
@@ -754,11 +796,21 @@ export default function PenaltyGame() {
               <Text style={s.goNum}>{gd.cs}</Text>
             </View>
           </View>
+          {/* Regulation history */}
           <View style={s.hist}>
-            {gd.pk.map((r,i) => <Text key={i} style={s.hIcon}>{r==="goal"?"⚽":"❌"}</Text>)}
+            {regPK.map((r,i) => <Text key={i} style={s.hIcon}>{r==="goal"?"⚽":"❌"}</Text>)}
             <Text style={s.hSep}> — </Text>
-            {gd.ck.map((r,i) => <Text key={i} style={s.hIcon}>{r==="goal"?"⚽":"❌"}</Text>)}
+            {regCK.map((r,i) => <Text key={i} style={s.hIcon}>{r==="goal"?"⚽":"❌"}</Text>)}
           </View>
+          {/* Sudden death rounds */}
+          {wentToSD && (
+            <View style={s.sdHistRow}>
+              <Text style={s.sdHistLabel}>🔥 DS:</Text>
+              {sdPK.map((r,i) => <Text key={i} style={s.hIcon}>{r==="goal"?"⚽":"❌"}</Text>)}
+              <Text style={s.hSep}> — </Text>
+              {sdCK.map((r,i) => <Text key={i} style={s.hIcon}>{r==="goal"?"⚽":"❌"}</Text>)}
+            </View>
+          )}
           <TouchableOpacity style={s.bigBtn} onPress={() => setPhase("menu")} activeOpacity={0.82}>
             <Text style={s.bigBtnTxt}>⬅  MENÚ</Text>
           </TouchableOpacity>
@@ -850,8 +902,19 @@ export default function PenaltyGame() {
           </View>
         </View>
         <View style={s.roundBadge}>
-          <Text style={s.roundTxt}>{Math.min(gd.round,TOTAL)}/{TOTAL}</Text>
-          <Text style={{color:diff.color, fontSize:9, fontWeight:"800"}}>{diff.label}</Text>
+          {isSuddenDeath ? (
+            <>
+              <Text style={[s.roundTxt, {color:"#FF6B35", fontSize:11}]}>🔥 DS</Text>
+              <Text style={{color:"#FF6B35", fontSize:9, fontWeight:"900", letterSpacing:1}}>
+                RONDA {gd.round - TOTAL}
+              </Text>
+            </>
+          ) : (
+            <>
+              <Text style={s.roundTxt}>{Math.min(gd.round,TOTAL)}/{TOTAL}</Text>
+              <Text style={{color:diff.color, fontSize:9, fontWeight:"800"}}>{diff.label}</Text>
+            </>
+          )}
         </View>
         <View style={[s.sbSide,{alignItems:"flex-end"}]}>
           <View style={s.sbTeamRow}>
@@ -868,13 +931,28 @@ export default function PenaltyGame() {
         </View>
       </View>
 
+      {/* Sudden death banner */}
+      {isSuddenDeath && !showMsg && (
+        <View style={[s.sdBanner, {top:topPad+86}]}>
+          <Text style={s.sdTxt}>🔥 MUERTE SÚBITA — convertí o perdés</Text>
+        </View>
+      )}
+
       {/* Turn label */}
       {!showMsg && (
         <View style={[s.turnWrap, {top:topPad+110}]}>
-          {phase==="player_kick" && <Text style={s.turnTxt}>TU TURNO — ajustá y pateá</Text>}
-          {isKicking    && <Text style={s.turnTxt}>¡Allá va!</Text>}
-          {isCpuPrep    && <Text style={[s.turnTxt,{color:"#3498DB"}]}>PATEA CPU — ¿Dónde atajás?</Text>}
-          {isSaving     && <Text style={[s.turnTxt,{color:"#3498DB"}]}>Vamos arquero...</Text>}
+          {phase==="player_kick" && (
+            <Text style={[s.turnTxt, isSuddenDeath && {color:"#FF6B35"}]}>
+              {isSuddenDeath ? "🔥 DESEMPATE — ¡a convertir!" : "TU TURNO — ajustá y pateá"}
+            </Text>
+          )}
+          {isKicking && <Text style={s.turnTxt}>¡Allá va!</Text>}
+          {isCpuPrep && (
+            <Text style={[s.turnTxt, {color: isSuddenDeath?"#FF6B35":"#3498DB"}]}>
+              {isSuddenDeath ? "🔥 CPU PATEA — ¡tapala!" : "PATEA CPU — ¿Dónde atajás?"}
+            </Text>
+          )}
+          {isSaving && <Text style={[s.turnTxt,{color:"#3498DB"}]}>Vamos arquero...</Text>}
         </View>
       )}
 
@@ -989,4 +1067,15 @@ const s = StyleSheet.create({
   actionBtnTxt:{color:"#000", fontSize:16, fontWeight:"900", letterSpacing:2},
   msgWrap:   {position:"absolute", top:"42%", left:0, right:0, alignItems:"center", zIndex:100},
   msgTxt:    {fontSize:40, fontWeight:"900", letterSpacing:2},
+  // Sudden death
+  sdBanner:  {position:"absolute", left:0, right:0, alignItems:"center", zIndex:55},
+  sdTxt:     {color:"#FF6B35", fontSize:11, fontWeight:"900", letterSpacing:1.2,
+              backgroundColor:"rgba(255,107,53,0.15)", paddingHorizontal:16, paddingVertical:5,
+              borderRadius:20, borderWidth:1, borderColor:"rgba(255,107,53,0.4)"},
+  sdFinishBadge:{color:"#FF6B35", fontSize:13, fontWeight:"900", letterSpacing:2,
+                  marginBottom:-6},
+  sdHistRow: {flexDirection:"row", alignItems:"center", gap:4,
+              backgroundColor:"rgba(255,107,53,0.12)", paddingHorizontal:12, paddingVertical:6,
+              borderRadius:12, borderWidth:1, borderColor:"rgba(255,107,53,0.3)"},
+  sdHistLabel:{color:"#FF6B35", fontSize:11, fontWeight:"900"},
 });
