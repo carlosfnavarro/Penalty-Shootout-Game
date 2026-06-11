@@ -1,14 +1,17 @@
 /**
- * Servidor de producción final para el Juego de Penales en Expo.
- * Sirve la compilación web de la aplicación móvil.
+ * Servidor de producción híbrido - Soporta dist y web-build
  */
 
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
 
-// Apuntamos a la carpeta de exportación web de Expo (artifacts/mobile/dist)
-const JUEGO_ROOT = path.resolve(__dirname, "..", "dist");
+const MOBILE_ROOT = path.resolve(__dirname, "..");
+// Revisa si existe 'dist', si no, usa 'web-build'
+const JUEGO_ROOT = fs.existsSync(path.join(MOBILE_ROOT, "dist")) 
+  ? path.join(MOBILE_ROOT, "dist") 
+  : path.join(MOBILE_ROOT, "web-build");
+
 const basePath = (process.env.BASE_PATH || "/").replace(/\/+$/, "");
 
 const MIME_TYPES = {
@@ -34,10 +37,7 @@ function serveStaticFile(urlPath, res) {
 
   if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
     res.writeHead(404, { "content-type": "text/plain" });
-    res.end(
-      "La compilacion de Expo todavia no se subio o no se encuentra en: " +
-        filePath,
-    );
+    res.end("La compilacion de Expo todavia no se encuentra en: " + filePath + "\nVerifica el Build Command en Render.");
     return;
   }
 
@@ -61,5 +61,5 @@ const server = http.createServer((req, res) => {
 
 const port = parseInt(process.env.PORT || "3000", 10);
 server.listen(port, "0.0.0.0", () => {
-  console.log(`Juego de Penales de Expo corriendo en puerto ${port}`);
+  console.log(`Servidor corriendo en puerto ${port}`);
 });
