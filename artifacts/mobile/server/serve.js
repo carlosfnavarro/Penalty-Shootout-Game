@@ -7,8 +7,8 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 
-// Apuntamos a la raíz del repositorio donde está el index.html de tu juego
-const JUEGO_ROOT = path.resolve(__dirname, "..", ".."); 
+// Subimos tres niveles para llegar a la raíz verdadera del repositorio de GitHub donde está tu juego
+const JUEGO_ROOT = path.resolve(__dirname, "..", "..", ".."); 
 const basePath = (process.env.BASE_PATH || "/").replace(/\/+$/, "");
 
 const MIME_TYPES = {
@@ -40,7 +40,7 @@ function serveStaticFile(urlPath, res) {
 
   if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
     res.writeHead(404, { "content-type": "text/plain" });
-    res.end("Archivo no encontrado en el servidor del juego");
+    res.end("Archivo no encontrado en el servidor del juego. Buscando en: " + filePath);
     return;
   }
 
