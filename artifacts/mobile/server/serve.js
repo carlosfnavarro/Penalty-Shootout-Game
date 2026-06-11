@@ -1,13 +1,12 @@
 /**
- * Servidor de diagnóstico para el Juego de Penales Luna Negra.
- * Muestra las carpetas en pantalla si no encuentra el index.html.
+ * Servidor de diagnóstico Fase 2 - Buscando el index.html
  */
 
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
 
-// Probamos con la ruta subiendo tres niveles
+// Dejamos la raíz del proyecto
 const JUEGO_ROOT = path.resolve(__dirname, "..", "..", ".."); 
 const basePath = (process.env.BASE_PATH || "/").replace(/\/+$/, "");
 
@@ -26,13 +25,22 @@ const MIME_TYPES = {
 
 function serveStaticFile(urlPath, res) {
   const safePath = path.normalize(urlPath).replace(/^(\.\.(\/|\\|$))+/, "");
+
+  // PROBAMOS BUSCAR EL INDEX ADENTRO DE ARTIFACTS/MOBILE O DONDE ESTÉ EL FRONTEND
+  // Si no funciona, el diagnóstico nos va a mostrar qué hay adentro de 'artifacts'
   let filePath = path.join(JUEGO_ROOT, safePath);
 
   if (urlPath === "/") {
-    filePath = path.join(JUEGO_ROOT, "index.html");
+    // Intentamos apuntar a donde debería estar el HTML del juego
+    filePath = path.join(JUEGO_ROOT, "artifacts", "mobile", "index.html");
+
+    // Si ahí no existe, probamos en artifacts/api-server/static-build
+    if (!fs.existsSync(filePath)) {
+      filePath = path.join(JUEGO_ROOT, "artifacts", "api-server", "static-build", "index.html");
+    }
   }
 
-  // SI EL ARCHIVO EXISTE, LO MANDA NORMAL
+  // SI EXISTE, LO MANDA NORMAL
   if (fs.existsSync(filePath) && !fs.statSync(filePath).isDirectory()) {
     const ext = path.extname(filePath).toLowerCase();
     const contentType = MIME_TYPES[ext] || "application/octet-stream";
@@ -42,25 +50,25 @@ function serveStaticFile(urlPath, res) {
     return;
   }
 
-  // SI NO EXISTE, MUESTRA ESTE DIAGNÓSTICO EN LA PÁGINA
+  // SI NO EXISTE, MUESTRA QUÉ HAY ADENTRO DE ARTIFACTS
   res.writeHead(404, { "content-type": "text/html; charset=utf-8" });
 
-  let carpetasVisibles = [];
+  let archivosArtifacts = [];
+  let archivosMobile = [];
   try {
-    carpetasVisibles = fs.readdirSync(JUEGO_ROOT);
+    archivosArtifacts = fs.readdirSync(path.join(JUEGO_ROOT, "artifacts"));
+    archivosMobile = fs.readdirSync(path.join(JUEGO_ROOT, "artifacts", "mobile"));
   } catch (e) {
-    carpetasVisibles = ["No se pudo leer la carpeta raíz: " + e.message];
+    archivosMobile = ["Error leyendo subcarpetas: " + e.message];
   }
 
   res.end(`
     <div style="font-family: monospace; padding: 20px; background: #1a1a1a; color: #fff; line-height: 1.6;">
-      <h2 style="color: #ff4a4a;">🔍 Detective del Servidor</h2>
-      <p><b>Ruta donde busqué el juego:</b> <span style="color: #e9c46a;">${filePath}</span></p>
-      <p><b>Archivos que encontré en esa raíz:</b></p>
-      <ul style="color: #2a9d8f;">
-        ${carpetasVisibles.map(f => `<li>${f}</li>`).join("")}
-      </ul>
-      <p><i>Mandame una captura de esta pantalla para ver la lista y te digo cómo acomodarlo ya mismo.</i></p>
+      <h2 style="color: #ff4a4a;">🔍 Detective Fase 2: Buscando el HTML</h2>
+      <p><b>Intenté cargar sin éxito:</b> <span style="color: #e9c46a;">${filePath}</span></p>
+      <p><b>Carpetas dentro de "artifacts":</b> <span style="color: #2a9d8f;">${archivosArtifacts.join(", ")}</span></p>
+      <p><b>Archivos dentro de "artifacts/mobile":</b> <span style="color: #e9c46a;">${archivosMobile.join(", ")}</span></p>
+      <p><i>Copiame lo que te salga en esta nueva pantalla y ya lo dejamos andando fijo.</i></p>
     </div>
   `);
 }
